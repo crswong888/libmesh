@@ -882,18 +882,26 @@ void ExodusII_IO::write_element_data (const EquationSystems & es)
   // also in the _output_variables vector.
   if (_output_variables.size() > 0)
     {
+      std::cout << "\nExodusII_IO::write_element_data\n";
+
       std::vector<std::string> monomials;
-      const FEType type(CONSTANT, MONOMIAL);
+      const std::vector<FEType> type = {FEType(CONSTANT, MONOMIAL), FEType(CONSTANT, MONOMIAL_VEC)};
 
       // Create a list of monomial variable names
-      es.build_variable_names(monomials, &type);
+      es.build_variable_names(monomials, &type[0]);
+      es.build_variable_names(monomials, &type[1]);
 
       // Filter that list against the _output_variables list.  Note: if names is still empty after
       // all this filtering, all the monomial variables will be gathered
       for (const auto & var : monomials)
         if (std::find(_output_variables.begin(), _output_variables.end(), var) != _output_variables.end())
           names.push_back(var);
+
+      for (unsigned int i = 0; i < names.size(); i++)
+        std::cout << names[i] << "\n";
     }
+
+  std::cout << "\n" << es << "\n";
 
   // If we pass in a list of names to "build_elemental_solution_vector()"
   // it'll filter the variables coming back.
