@@ -882,10 +882,13 @@ void ExodusII_IO::write_element_data (const EquationSystems & es)
   // also in the _output_variables vector.
   if (_output_variables.size() > 0)
     {
+      // Create a list of CONSTANT MONOMIAL variable names
       std::vector<std::string> monomials;
-      const FEType type(CONSTANT, MONOMIAL);
+      FEType type(CONSTANT, MONOMIAL);
+      es.build_variable_names(monomials, &type);
 
-      // Create a list of monomial variable names
+      // Now concatenate a list of CONSTANT MONOMIAL_VEC variables names
+      type = FEType(CONSTANT, MONOMIAL_VEC);
       es.build_variable_names(monomials, &type);
 
       // Filter that list against the _output_variables list.  Note: if names is still empty after
@@ -999,6 +1002,16 @@ ExodusII_IO::write_element_data_from_discontinuous_nodal_data
   std::vector<std::string> monomial_var_names;
   const FEType fe_type(CONSTANT, MONOMIAL);
   es.build_variable_names(monomial_var_names, &fe_type);
+
+  // Should the same apply for CONSTANT MONOMIAL_VECS? [CW]
+  // i.e., get rid of 'const' on 'fe_type' and rerun:
+  //    fe_type = FEType(CONSTANT, MONOMIAL_VEC);
+  //    es.build_variable_names(monomial_var_names, &fe_type);
+  // then, find_variable_numbers can be used without a type
+  // (since we know for sure their monomials) like:
+  //    var_nums = es.find_variable_numbers(monomial_var_names)
+  // then the dof indices for var_nums have to be resolved
+  // manually like in build_elemental_solution_vector()
 
   // Remove all names from var_names that are not in _output_variables.
   // Note: This approach avoids errors when the user provides invalid

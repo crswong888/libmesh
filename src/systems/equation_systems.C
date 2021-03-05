@@ -440,7 +440,8 @@ void EquationSystems::build_variable_names (std::vector<std::string> & var_names
                                             const FEType * type,
                                             const std::set<std::string> * system_names) const
 {
-  unsigned int var_num=0;
+  // start indexing at end of possibly non-empty vector of variable names to avoid overwriting them
+  unsigned int var_num = var_names.size();
 
   // Need to size var_names by scalar variables plus all the
   // vector components for all the vector variables
@@ -481,7 +482,7 @@ void EquationSystems::build_variable_names (std::vector<std::string> & var_names
     // Here, we're assuming the number of vector components is the same
     // as the mesh dimension. Will break for mixed dimension meshes.
 
-    var_names.resize( nv );
+    var_names.resize( var_num + nv );
   }
 
   for (const auto & pr : _systems)
@@ -846,65 +847,103 @@ EquationSystems::build_elemental_solution_vector (std::vector<Number> & soln,
 
   // Localize into 'soln', provided that parallel_soln is not empty.
   // Note: parallel_soln will be empty in the event that none of the
-  // input names were CONSTANT, MONOMIAL variables or there were
-  // simply no CONSTANT, MONOMIAL variables in the EquationSystems
-  // object.
+  // input names were CONSTANT, MONOMIAL nor components of CONSTANT,
+  // MONOMIAL_VEC variables or there were simply none of these in
+  // the EquationSystems object.
   soln.clear();
   if (parallel_soln)
     parallel_soln->localize_to_one(soln);
 }
 
-
-
 std::vector<std::pair<unsigned int, unsigned int>>
 EquationSystems::find_variable_numbers
-  (std::vector<std::string> & names, const FEType * type) const
+  (std::vector<std::string> & names, const FEType * type, const std::vector<FEType> * types) const
 {
   // This function must be run on all processors at once
   parallel_object_only();
 
   libmesh_assert (this->n_systems());
 
-  // If the names vector has entries, we will only populate the soln vector
-  // with names included in that list.  Note: The names vector and var_nums
-  // vector pairs are reordered alphabetically upon exiting this function.
-  std::vector<std::pair<unsigned int, unsigned int>> var_nums;
-  std::vector<std::string> filter_names = names;
-  bool is_filter_names = !filter_names.empty();
+  // Resolve class of type input and ensure that at least one of them is null
+  libmesh_error_msg_if(type && types,
+                       "Input either 'type' or 'types' in find_variable_numbers, but not both.");
 
+  std::vector<FEType> type_filter;
+  if (type)
+    type_filter.push_back(*type);
+  else if (types)
+    type_filter = *types;
+
+  // Store a copy of the valid variable names, if any. The names vector wiil be be repopulated with
+  // any valid names (or all if 'is_names_empty') in the system which pass through the type filter,
+  // if any. If the variable is a vector, its name will be decomposed into its separate components
+  // in accordance with build_variable_names()
+  std::vector<std::string> name_filter = names;
+  bool is_names_empty = name_filter.empty();
   names.clear();
+
+  // initialize convenience variables
+  FEType var_type;
+  std::string name;
+
+  const std::vector<std::string> component_suffix = {"_x", "_y", "_z"};
+  unsigned int dim = this->get_mesh().mesh_dimension();
+  libmesh_error_msg_if(dim > 3, "Invalid dim in find_variable_numbers");
+
+  // Now filter through the variables in each system and store the system index and their index
+  // within that system. This way, we know where to find their data even after we sort them
+  std::vector<std::pair<unsigned int, unsigned int>> var_nums;
 
   for (const auto & pr : _systems)
     {
       const System & system = *(pr.second);
-      const unsigned int nv_sys = system.n_vars();
 
-      for (unsigned int var=0; var < nv_sys; ++var)
+      for (unsigned int var = 0; var < system.n_vars(); ++var)
         {
-          const std::string & name = system.variable_name(var);
-          if ((type && system.variable_type(var) != *type) ||
-              (is_filter_names && std::find(filter_names.begin(), filter_names.end(), name) == filter_names.end()))
+          // apply the type filter
+          var_type = system.variable_type(var);
+          if (type && std::find(type_filter.begin(), type_filter.end(), var_type) == type_filter.end())
             continue;
 
-          // Otherwise, this variable should be output
+          // apply the valid variable name filter (note that all variables pass if it is empty)
+          if (FEInterface::field_type(var_type) == TYPE_VECTOR)
+            {
+              std::vector<std::string> component_names;
+              for (unsigned int comp = 0; comp < dim; ++comp)
+                {
+                  name = system.variable_name(var) + component_suffix[comp];
+                  if (is_names_empty ||
+                      (std::find(name_filter.begin(), name_filter.end(), name) != name_filter.end()))
+                    component_names.push_back(name);
+                }
+
+              if (! component_names.empty())
+                names.insert(names.end(), component_names.begin(), component_names.end());
+              else
+                continue;
+            }
+          else /*scalar variable*/
+            {
+              name = system.variable_name(var);
+              if (is_names_empty ||
+                  (std::find(name_filter.begin(), name_filter.end(), name) != name_filter.end()))
+                names.push_back(name);
+              else
+                continue;
+            }
+
+          // if the variable made it through both filters get its system indices
           var_nums.emplace_back(system.number(), var);
         }
     }
 
-  for (const auto & var_num : var_nums)
-    {
-      const std::string & name =
-        this->get_system(var_num.first).variable_name(var_num.second);
-      if (names.empty() || names.back() != name)
-        names.push_back(name);
-    }
-
   // Sort the var_nums vector pairs alphabetically based on the variable name
-  std::vector<unsigned int> sort_index(names.size());
+  std::vector<unsigned int> sort_index(var_nums.size());
   std::iota(sort_index.begin(), sort_index.end(), 0);
   std::sort(sort_index.begin(), sort_index.end(),
-            [&](const unsigned int & lhs, const unsigned  & rhs)
-            {return names[lhs] < names[rhs];});
+            [&](const unsigned int & lhs, const unsigned int & rhs)
+            {return this->get_system(var_nums[lhs].first).variable_name(var_nums[lhs].second) <
+                    this->get_system(var_nums[rhs].first).variable_name(var_nums[rhs].second);});
 
   std::vector<std::pair<unsigned int, unsigned int>> var_nums_sorted(var_nums.size());
   for (auto i : index_range(var_nums_sorted))
@@ -924,11 +963,14 @@ EquationSystems::find_variable_numbers
 std::unique_ptr<NumericVector<Number>>
 EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::string> & names) const
 {
-  FEType type(CONSTANT, MONOMIAL);
+  // Filter any names that aren't elemental variables and get the system indices for those that are.
+  // Note that it's probably fine if the names vector is empty here, since we'll still at least
+  // filter out all non-monomials. If there's no monomials, then nothing is output here.
+  std::vector<FEType> type = {FEType(CONSTANT, MONOMIAL), FEType(CONSTANT, MONOMIAL_VEC)};
   std::vector<std::pair<unsigned int, unsigned int>> var_nums =
-    this->find_variable_numbers(names, &type);
+    this->find_variable_numbers(names, /*type=*/nullptr, &type);
 
-  const std::size_t nv = var_nums.size();
+  const std::size_t nv = names.size(); /*total number of vars including vector components*/
   const dof_id_type ne = _mesh.n_elem();
   libmesh_assert_equal_to (ne, _mesh.max_elem_id());
 
@@ -959,11 +1001,7 @@ EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::stri
                      /*ParallelType=*/PARALLEL);
 
   unsigned int sys_ctr = 0;
-
-  // For each system in this EquationSystems object,
-  // update the global solution and collect the
-  // CONSTANT MONOMIALs.  The entries are in variable-major
-  // format.
+  unsigned int var_ctr = 0;
   for (auto i : index_range(var_nums))
     {
       std::pair<unsigned int, unsigned int> var_num = var_nums[i];
@@ -1000,11 +1038,23 @@ EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::stri
           {
             dof_map.dof_indices (elem, dof_indices, var);
 
-            libmesh_assert_equal_to (1, dof_indices.size());
-
-            parallel_soln.set((ne*i)+elem->id(), sys_soln(dof_indices[0]));
+            // Is it safe to use dof_indices() here as a guide for vector components? Because the
+            // variable names were not set in find_variable_numbers() in quite the same way. That
+            // is, those were created in accordance with the mesh dimension. It just seemed
+            // convenient to use the info we already had here instead of calling a mesh object. [CW]
+            for (unsigned int comp = 0; comp < dof_indices.size(); comp++)
+              parallel_soln.set(ne * (var_ctr + comp) + elem->id(), sys_soln(dof_indices[comp]));
           }
+
+      var_ctr += dof_indices.size();
     } // end loop over var_nums
+
+  // NOTE: number of output names might not be equal to the number passed to this function. Any that
+  // aren't CONSTANT MONOMIALS or components of CONSTANT MONOMIAL_VECS have been filtered out (see
+  // EquationSystems::find_variable_numbers).
+  //
+  // But if everything is accounted for properly, then names.size() = var_count
+  libmesh_assert_equal_to(names.size(), var_ctr);
 
   parallel_soln.close();
   return parallel_soln_ptr;
