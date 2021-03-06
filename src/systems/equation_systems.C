@@ -899,9 +899,9 @@ EquationSystems::find_variable_numbers
     type_filter = *types;
 
   // Store a copy of the valid variable names, if any. The names vector wiil be be repopulated with
-  // any valid names (or all if none) in the system which pass through the type filter, if any.
-  // If the variable is a vector, its name will be decomposed into its separate components in
-  // accordance with build_variable_names()
+  // any valid names (or all if is_names_empty) in the system which pass through the type filter,
+  // if any. If the variable is a vector, its name will be decomposed into its separate components
+  // in accordance with build_variable_names()
   std::vector<std::string> name_filter = names;
   bool is_names_empty = name_filter.empty();
   names.clear();
@@ -915,15 +915,12 @@ EquationSystems::find_variable_numbers
   libmesh_error_msg_if(dim > 3, "Invalid dim in find_variable_numbers");
 
   // Now filter through the variables in each system and store the system index and their index
-  // within that system. This way, we know where to find their data even after we sort them per
-  // ExodusII standards
+  // within that system. This way, we know where to find their data even after we sort them
   std::vector<std::pair<unsigned int, unsigned int>> var_nums;
-  const_system_iterator       pos = _systems.begin();
-  const const_system_iterator end = _systems.end();
 
-  for (; pos != end; ++pos)
+  for (const auto & pr : _systems)
     {
-      const System & system = *(pos->second);
+      const System & system = *(pr.second);
 
       for (unsigned int var = 0; var < system.n_vars(); ++var)
         {
@@ -967,18 +964,18 @@ EquationSystems::find_variable_numbers
         }
     }
 
-  // currently not properly sorting in parallel
+  // currently not properly sorting in parallel (working fine in serial though...)
   // system number 30815 seems to mean bad pointer
   std::cout << "Sorting...\n";
 
   const std::vector<std::string> basename = {"velocity", "vel_x", "vel_y"};
 
   // Sort the var_nums vector pairs alphabetically based on the variable name
-  std::vector<unsigned int> sort_index(names.size());
+  std::vector<unsigned int> sort_index(var_nums.size());
   std::iota(sort_index.begin(), sort_index.end(), 0);
   std::sort(sort_index.begin(), sort_index.end(),
-            [&](const unsigned int & lhs, const unsigned  & rhs)
-            {return basename[lhs] < basename [rhs];});
+            [&](const unsigned int & lhs, const unsigned int & rhs)
+            {return basename[lhs] < basename[rhs];});
             // {return this->get_system(var_nums[lhs].first).variable_name(var_nums[lhs].second) <
             //         this->get_system(var_nums[rhs].first).variable_name(var_nums[rhs].second);});
 
@@ -987,6 +984,8 @@ EquationSystems::find_variable_numbers
     {
       var_nums_sorted[i].first = var_nums[sort_index[i]].first;
       var_nums_sorted[i].second = var_nums[sort_index[i]].second;
+
+      std::cout << "Sorted: " << var_nums_sorted[i].first << ", " << var_nums_sorted[i].second << "\n";
     }
 
   // Also sort the names vector
@@ -1000,9 +999,11 @@ EquationSystems::find_variable_numbers
 std::unique_ptr<NumericVector<Number>>
 EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::string> & names) const
 {
+  std::cout << "\n\nEquationSystems::build_parallel_elemental_solution_vector\n";
+
   // Filter any names that aren't elemental variables and get the system indices for those that are.
   // Note that it's probably fine if the names vector is empty here, since we'll still at least
-  // filter out all non-monomials - if there's none in the system, then nothing is output here.
+  // filter out all non-monomials. If there's no monomials, then nothing is output here.
   std::vector<FEType> type = {FEType(CONSTANT, MONOMIAL), FEType(CONSTANT, MONOMIAL_VEC)};
   std::vector<std::pair<unsigned int, unsigned int>> var_nums =
     this->find_variable_numbers(names, /*type=*/nullptr, &type);
@@ -1011,7 +1012,7 @@ EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::stri
   const dof_id_type ne = _mesh.n_elem();
   libmesh_assert_equal_to (ne, _mesh.max_elem_id());
 
-  std::cout << "\n\nEquationSystems::build_parallel_elemental_solution_vector\n";
+  std::cout << "\nFiltered/sorted names:\n";
   for (unsigned int i = 0; i < nv; i++)
     std::cout << names[i] << "\n";
 
@@ -1083,6 +1084,9 @@ EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::stri
           {
             dof_map.dof_indices (elem, dof_indices, var);
 
+            // i should be careful referencing dof indices here,
+            // since the components were built in accordance with mesh dimension
+
             // parallel_soln.set((ne*i)+elem->id(), sys_soln(dof_indices[0]));
             for (unsigned int comp = 0; comp < dof_indices.size(); comp++)
               parallel_soln.set(ne * (var_ctr + comp) + elem->id(), sys_soln(dof_indices[comp]));
@@ -1096,8 +1100,7 @@ EquationSystems::build_parallel_elemental_solution_vector (std::vector<std::stri
   // NOTE: number of output names might not be equal to the number passed to this function. Any that
   // aren't CONSTANT MONOMIALS or components of CONSTANT MONOMIAL_VECS have been filtered out (see
   // EquationSystems::find_variable_numbers).
-  //
-  // But if everything is accounted for properly then names.size() = var_count
+  // But if everything is accounted for properly, then names.size() = var_count
   libmesh_assert_equal_to(names.size(), var_ctr);
 
   parallel_soln.close();

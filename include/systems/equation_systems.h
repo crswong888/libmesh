@@ -348,9 +348,9 @@ public:
    * is empty, this returns all variables of the type.
    *
    * This function is designed to work for either a single type or a
-   * vector of types, but not both, by simply overloading inputs. It can't
-   * be called a second time with another type because it filtered the
-   * names of those types on the first call.
+   * vector of types, but not both. It can't just be called a second
+   * time with another type because it filters the names of those types
+   * on the first call.
    *
    * TODO: find a more generic way to handle this whole procedure.
    */
