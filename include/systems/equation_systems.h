@@ -344,11 +344,20 @@ public:
 
   /**
    * Finds system and variable numbers for any variables of \p type
-   * corresponding to the entries in the input 'names' vector.
+   * corresponding to the entries in the input 'names' vector. If 'names'
+   * is empty, this returns all variables of the type.
+   *
+   * This function is designed to work for either a single type or a
+   * vector of types, but not both, by simply overloading inputs. It can't
+   * be called a second time with another type because it filtered the
+   * names of those types on the first call.
+   *
+   * TODO: find a more generic way to handle this whole procedure.
    */
   std::vector<std::pair<unsigned int, unsigned int>>
   find_variable_numbers (std::vector<std::string> & names,
-                         const FEType * type=nullptr) const;
+                         const FEType * type=nullptr,
+                         const std::vector<FEType> * types=nullptr) const;
 
   /**
    * Builds a parallel vector of CONSTANT MONOMIAL solution values
